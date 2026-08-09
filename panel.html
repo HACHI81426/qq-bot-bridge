@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我是机器人 v1.0.5</title>
+<style>
+:root{
+  --g1:#8ecdfc; --g2:#a89cf8; --g3:#e4b1f5; --g4:#ffa8cf; --g5:#8fe0da;
+  --text:#1c1c1e; --muted:rgba(28,28,30,.55);
+  --border:rgba(255,255,255,.55);
+  --surface:rgba(255,255,255,.38);
+  --surface-strong:rgba(255,255,255,.5);
+  --bubble-user:rgba(70,140,255,.64); --bubble-user-text:#fff;
+  --bubble-bot:rgba(255,255,255,.5);
+  --bubble-bot-text:#1c1c1e;
+  --accent:#0a84ff; --online:#30d158; --busy:#ff9f0a; --off:#ff453a;
+  --avatar-bot:rgba(120,120,130,.55);
+  --shadow:0 2px 10px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.07);
+  --bubble-shadow:0 4px 16px rgba(0,0,0,.14), 0 2px 5px rgba(0,0,0,.09);
+}
+body.dark{
+  --g1:#0c2248; --g2:#251b52; --g3:#472052; --g4:#5c1f3e; --g5:#0d3b46;
+  --text:#f2f2f7; --muted:rgba(242,242,247,.55);
+  --border:rgba(255,255,255,.14);
+  --surface:rgba(24,24,30,.45);
+  --surface-strong:rgba(40,40,48,.6);
+  --bubble-user:rgba(80,150,255,.74); --bubble-user-text:#fff;
+  --bubble-bot:rgba(40,40,48,.55);
+  --bubble-bot-text:#f2f2f7;
+  --avatar-bot:rgba(140,140,150,.5);
+  --shadow:0 2px 12px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.25);
+  --bubble-shadow:0 5px 20px rgba(0,0,0,.45), 0 2px 6px rgba(0,0,0,.32);
+}
+body.tint-purple{--accent:#af52de;--bubble-user:rgba(158,102,222,.62);--g1:#c4adf7;--g2:#9dbcf7;--g3:#e3b0f5;--g4:#ffb3dd;--g5:#a9d8f2}
+body.tint-pink{--accent:#ff2d55;--bubble-user:rgba(240,96,128,.62);--g1:#ffb9d0;--g2:#ffcdb8;--g3:#ffa9e0;--g4:#cbb4f5;--g5:#ffdcb5}
+body.tint-orange{--accent:#ff9500;--bubble-user:rgba(250,140,70,.64);--g1:#ffd9ae;--g2:#ffb98f;--g3:#ff9ec7;--g4:#a9bcf7;--g5:#ffe3b8}
+body.tint-mint{--accent:#00c7be;--bubble-user:#00c7be;--g1:#a6f2d8;--g2:#a6e2f7;--g3:#c8f0b8;--g4:#b9c9f5;--g5:#a8f2ea}
+body.tint-graphite{--accent:#8e8e93;--bubble-user:#636366;--g1:#e2e6ee;--g2:#ccd7e6;--g3:#e6dcf0;--g4:#dcd6ea;--g5:#cfdce8}
+body.dark.tint-purple{--g1:#1c1140;--g2:#232052;--g3:#351a50;--g4:#471545;--g5:#1a2450;--bubble-user:rgba(168,116,230,.72)}
+body.dark.tint-pink{--g1:#33101f;--g2:#401a20;--g3:#481734;--g4:#2c1840;--g5:#2a1e30;--bubble-user:rgba(248,110,140,.72)}
+body.dark.tint-orange{--g1:#33190d;--g2:#40240f;--g3:#482514;--g4:#381a14;--g5:#2e2015;--bubble-user:rgba(255,152,84,.74)}
+body.dark.tint-mint{--g1:#0e2b24;--g2:#103240;--g3:#173b2a;--g4:#122a3e;--g5:#0f3235}
+body.dark.tint-graphite{--g1:#141418;--g2:#1a1a20;--g3:#222230;--g4:#1c1c28;--g5:#171722}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  margin:0;font-size:14px;color:var(--text);
+  background:linear-gradient(135deg,var(--g1),var(--g2),var(--g3),var(--g4),var(--g5),var(--g3),var(--g2),var(--g1));
+  background-size:400% 400%;
+  animation:dream 30s ease-in-out infinite;
+  min-height:100vh;
+}
+body::before,body::after{
+  content:"";position:fixed;inset:-30%;z-index:-1;pointer-events:none;
+  filter:blur(70px) saturate(140%);
+}
+body::before{
+  background:
+    radial-gradient(30% 38% at 22% 24%,var(--g2),transparent 65%),
+    radial-gradient(34% 42% at 78% 18%,var(--g3),transparent 65%),
+    radial-gradient(38% 46% at 48% 88%,var(--g5),transparent 68%);
+  opacity:.85;
+  animation:drift 34s ease-in-out infinite alternate;
+}
+body::after{
+  background:
+    radial-gradient(28% 36% at 82% 76%,var(--g4),transparent 65%),
+    radial-gradient(26% 34% at 20% 78%,var(--g1),transparent 65%),
+    radial-gradient(30% 40% at 62% 42%,var(--g3),transparent 62%);
+  opacity:.6;
+  animation:drift2 44s ease-in-out infinite alternate;
+}
+@keyframes dream{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+@keyframes drift{0%{transform:translate3d(-2%,-1%,0) scale(1)}100%{transform:translate3d(2.5%,1.5%,0) scale(1.08)}}
+@keyframes drift2{0%{transform:translate3d(1.5%,1%,0) scale(1.05)}100%{transform:translate3d(-2%,-1.5%,0) scale(1)}}
+header{
+  position:sticky;top:0;z-index:5;padding:8px 12px;
+  background:var(--surface);
+  -webkit-backdrop-filter:blur(24px) saturate(170%);backdrop-filter:blur(24px) saturate(170%);
+  border-bottom:1px solid var(--border);
+}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+h1{font-size:15px;margin:0;font-weight:600;text-shadow:0 1px 2px rgba(255,255,255,.35)}
+.tab{padding:4px 12px;border:1px solid var(--border);border-radius:16px;cursor:pointer;font-size:12px;
+  background:var(--surface);color:var(--text);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(128,128,138,.15);margin-left:6px;color:var(--muted)}
+.badge.online{background:rgba(48,209,88,.22);color:var(--online)}
+.badge.busy{background:rgba(255,159,10,.22);color:var(--busy)}
+.badge.off{background:rgba(255,69,58,.2);color:var(--off)}
+.toolbar{display:flex;align-items:center;gap:6px;margin-top:8px}
+.ghost{padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--accent);cursor:pointer;font-size:12px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.mode-btn{width:28px;height:28px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.dots{display:flex;gap:5px;align-items:center;margin-left:auto}
+.dot{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid rgba(255,255,255,.6);box-shadow:var(--shadow)}
+.dot.active{border-color:var(--text)}
+main{display:flex;flex-direction:column;height:calc(100vh - 112px)}
+#msgs{flex:1;overflow-y:auto;padding:12px 10px}
+#msgs::-webkit-scrollbar{width:6px}
+#msgs::-webkit-scrollbar-thumb{background:rgba(128,128,138,.35);border-radius:3px}
+.msg{display:flex;margin:10px 0;align-items:flex-end}
+.msg.user{justify-content:flex-end}
+.avatar{width:26px;height:26px;border-radius:50%;flex:none;margin:0 7px;background:var(--avatar-bot);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;box-shadow:var(--shadow)}
+.msg.user .avatar{background:var(--accent);order:2}
+.bubble{
+  max-width:72%;padding:8px 13px;border-radius:18px;white-space:pre-wrap;word-break:break-word;
+  line-height:1.45;font-size:14px;box-shadow:var(--bubble-shadow);
+}
+.msg.user .bubble{
+  background:var(--bubble-user);
+  color:var(--bubble-user-text);
+  -webkit-backdrop-filter:blur(16px) saturate(160%);backdrop-filter:blur(16px) saturate(160%);
+  border:1px solid rgba(255,255,255,.38);
+  border-top-right-radius:5px;
+}
+.msg.codex .bubble{
+  background:var(--bubble-bot);color:var(--bubble-bot-text);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);
+  border:1px solid var(--border);border-top-left-radius:5px;
+}
+.bubble .t{display:block;font-size:10px;color:var(--muted);margin-top:3px;opacity:.85}
+.msg.user .bubble .t{color:inherit;opacity:.75}
+#composer{
+  display:flex;gap:8px;padding:9px 12px;
+  background:var(--surface);border-top:1px solid var(--border);
+  -webkit-backdrop-filter:blur(24px) saturate(170%);backdrop-filter:blur(24px) saturate(170%);
+}
+#input{
+  flex:1;padding:8px 14px;border:1px solid var(--border);border-radius:19px;
+  background:var(--surface-strong);color:var(--text);font-size:13px;resize:none;font-family:inherit;outline:none;
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+}
+#input::placeholder{color:var(--muted)}
+#input:focus{border-color:var(--accent)}
+#send{width:52px;height:38px;border:none;border-radius:19px;background:var(--accent);color:#fff;cursor:pointer;font-size:15px;box-shadow:var(--shadow)}
+#pushLabel{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none}
+#pushLabel input{accent-color:var(--accent);cursor:pointer}
+#toast{position:fixed;bottom:76px;left:50%;transform:translateX(-50%);background:rgba(28,28,34,.88);color:#fff;padding:8px 14px;border-radius:10px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:99;max-width:80%}
+#empty{color:var(--muted);text-align:center;margin-top:40px}
+</style>
+</head>
+<body>
+<header>
+<div class="row"><h1>我是机器人 v1.0.5</h1><div id="bots"></div></div>
+  <div class="toolbar">
+    <button class="mode-btn" id="mode" title="浅色/深色">◐</button>
+    <div class="dots" id="tints"></div>
+    <button class="ghost" id="icloud" title="打开 iCloud Codex 文件夹">iCloud 文件夹</button>
+  </div>
+</header>
+<main>
+  <div id="msgs"><div id="empty">加载中…</div></div>
+  <div id="composer">
+    <textarea id="input" rows="1" placeholder="以当前机器人身份发送…"></textarea>
+    <label id="pushLabel"><input type="checkbox" id="pushQQ" checked>同步到QQ</label>
+    <button id="send" title="发送">↑</button>
+  </div>
+</main>
+<div id="toast"></div>
+<script>
+const TINTS = [
+  ['', '蓝', '#0a84ff'],
+  ['purple', '紫', '#af52de'],
+  ['pink', '粉', '#ff2d55'],
+  ['orange', '橙', '#ff9500'],
+  ['mint', '薄荷', '#00c7be'],
+  ['graphite', '石墨', '#8e8e93']
+];
+const state = { bots: [], current: null, es: null };
+const $ = s => document.querySelector(s);
+
+function applyTheme(){
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode') || localStorage.getItem('qqp_mode') || 'light';
+  const tint = q.get('tint') || localStorage.getItem('qqp_tint') || '';
+  document.body.className = (mode === 'dark' ? 'dark ' : '') + (tint ? 'tint-' + tint : '');
+  $('#mode').textContent = mode === 'dark' ? '☾' : '☀';
+  document.querySelectorAll('.dot').forEach(d => d.classList.toggle('active', d.dataset.tint === tint));
+}
+$('#mode').onclick = () => {
+  const mode = localStorage.getItem('qqp_mode') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('qqp_mode', mode); applyTheme();
+};
+$('#tints').innerHTML = '';
+TINTS.forEach(t => {
+  const d = document.createElement('span');
+  d.className = 'dot'; d.dataset.tint = t[0]; d.title = t[1]; d.style.background = t[2];
+  d.onclick = () => { localStorage.setItem('qqp_tint', t[0]); applyTheme(); };
+  $('#tints').appendChild(d);
+});
+
+async function loadBots(){
+  const r = await fetch('/api/bots'); state.bots = await r.json();
+  $('#bots').innerHTML = '';
+  state.bots.forEach(b => {
+    const el = document.createElement('span');
+    el.className = 'tab'; el.dataset.id = b.id;
+    const cls = b.status === '在线' ? 'online' : b.status === '处理中' ? 'busy' : 'off';
+    el.innerHTML = b.name + '<span class="badge ' + cls + '">' + b.status + '</span>';
+    el.onclick = () => selectBot(b.id);
+    $('#bots').appendChild(el);
+  });
+  if (!state.current && state.bots.length) selectBot(state.bots[0].id);
+}
+async function selectBot(id){
+  state.current = id;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.id === id));
+  const r = await fetch('/api/chat?bot=' + encodeURIComponent(id));
+  render(await r.json());
+}
+function botShort(id){ const b = state.bots.find(x => x.id === id); return b ? b.name.slice(0,1) : '?'; }
+function render(list){
+  const box = $('#msgs'); box.innerHTML = '';
+  if (!list.length){ box.innerHTML = '<div id="empty">暂无聊天记录</div>'; return; }
+  list.forEach(m => appendMsg(m));
+  box.scrollTop = box.scrollHeight;
+}
+function appendMsg(m){
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + m.role;
+  const av = document.createElement('div');
+  av.className = 'avatar'; av.textContent = m.role === 'user' ? '我' : (state.current ? botShort(state.current) : 'C');
+  const bub = document.createElement('div');
+  bub.className = 'bubble';
+  bub.innerHTML = esc(m.text) + '<span class="t">' + m.ts + '</span>';
+  wrap.appendChild(av); wrap.appendChild(bub);
+  $('#msgs').appendChild(wrap);
+  const empty = $('#empty'); if (empty) empty.remove();
+  $('#msgs').scrollTop = $('#msgs').scrollHeight;
+}
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(t){ const el = $('#toast'); el.textContent = t; el.style.opacity = '1'; clearTimeout(el._t); el._t = setTimeout(() => { el.style.opacity = '0'; }, 3500); }
+function connectSSE(){
+  state.es = new EventSource('/events');
+  state.es.onmessage = e => {
+    try {
+      const p = JSON.parse(e.data);
+      if (p.type === 'status'){
+        const tab = document.querySelector('.tab[data-id="' + p.bot + '"]');
+        if (tab){
+          const b = tab.querySelector('.badge');
+          b.className = 'badge ' + (p.status === '在线' ? 'online' : p.status === '处理中' ? 'busy' : 'off');
+          b.textContent = p.status;
+        }
+      } else if (p.type === 'chat' && p.bot === state.current){
+        appendMsg(p.entry);
+      }
+    } catch(err){}
+  };
+  state.es.onerror = () => { setTimeout(() => { try { state.es.close(); } catch(err){} connectSSE(); }, 3000); };
+}
+$('#send').onclick = async () => {
+  const msg = $('#input').value.trim();
+  if (!msg || !state.current) return;
+  $('#input').value = '';
+  localStorage.setItem('qqp_pushqq', $('#pushQQ').checked ? '1' : '0');
+  const resp = await fetch('/api/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, message: msg, pushQQ: $('#pushQQ').checked }) });
+  try { const j = await resp.json(); if (j.pushNote) toast(j.pushNote); } catch(err){}
+};
+$('#input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#send').click(); }
+  this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+$('#icloud').onclick = () => fetch('/api/open-icloud', { method:'POST' });
+$('#pushQQ').checked = localStorage.getItem('qqp_pushqq') !== '0';
+applyTheme(); loadBots(); connectSSE();
+</script>
+</body>
+</html>

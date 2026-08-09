@@ -1,0 +1,14 @@
+# 配置与密钥
+.env
+.env.*
+!.env.example
+
+# 运行时数据
+logs/
+.out/
+data/
+chat-logs/
+workspace/
+inbox/
+backups/
+node_modules/
