@@ -188,6 +188,9 @@ async function downloadAttachment(bot, att) {
 const sessions = new Map(); // openid -> thread_id
 const running = new Map();  // openid -> boolean
 const onboardingSent = new Set(); // openid -> 已发送安全模式引导
+const activeProcs = new Map(); // openid -> child（当前运行的 Codex 进程）
+const cancelled = new Set();   // openid -> 已请求停止
+const STOP_RE = /^(停止|停|stop|cancel|取消|中断|终止)$/i;
 
 function parseThreadId(jsonl) {
   for (const line of jsonl.split('\n')) {
@@ -231,6 +234,7 @@ function runCodex(prompt, openid, workDir = cfg.workDir) {
         CODEX_HOME: cfg.codexHome || path.join(os.homedir(), '.codex'),
       },
     });
+    activeProcs.set(openid, child);
 
     let jsonBuf = '';
     const timer = setTimeout(() => {
@@ -240,9 +244,10 @@ function runCodex(prompt, openid, workDir = cfg.workDir) {
 
     child.stdout.on('data', d => { jsonBuf += d.toString(); });
     child.stderr.on('data', () => {});
-    child.on('error', err => { clearTimeout(timer); reject(err); });
+    child.on('error', err => { clearTimeout(timer); activeProcs.delete(openid); reject(err); });
     child.on('close', code => {
       clearTimeout(timer);
+      activeProcs.delete(openid);
       try {
         const thread = parseThreadId(jsonBuf);
         if (thread) sessions.set(openid, thread);
@@ -522,20 +527,37 @@ async function processBotText(bot, prompt, displayText, { chan = null, msgId = n
   pushChat(bot, { role: 'user', text: displayText });
   appendTranscript(bot, '用户', displayText);
   broadcast({ type: 'chat', bot: bot.id, entry: chatLogs.get(bot.id).slice(-1)[0] });
+  if (STOP_RE.test(String(displayText || '').trim())) {
+    const proc = activeProcs.get(userKey);
+    if (running.get(userKey) && proc) {
+      try { proc.kill(); } catch {}
+      cancelled.add(userKey);
+      if (notifyQQ && chan) await chan.send('已停止当前任务。', msgId, msgSeq + 1).catch(() => {});
+      return { ok: false, reason: 'cancelled' };
+    }
+    if (notifyQQ && chan) await chan.send('当前没有正在处理的任务。', msgId, msgSeq + 1).catch(() => {});
+    return { ok: false, reason: 'idle-stop' };
+  }
   if (running.get(userKey)) {
     if (notifyQQ && chan) await chan.send('上一条还在处理，请稍候。', msgId, msgSeq + 1);
     return { ok: false, reason: 'busy' };
   }
   running.set(userKey, true);
   broadcastStatus(bot);
+  let nextSeq = msgSeq + 1;
+  const progressTimer = setTimeout(() => {
+    if (notifyQQ && chan && running.get(userKey)) {
+      chan.send('任务仍在处理中（已超过 1 分钟），可发送"停止"取消。', msgId, nextSeq++).catch(() => {});
+    }
+  }, 60000);
   try {
     const reply = await runCodex(prompt, userKey, cfg.workDir);
+    if (cancelled.has(userKey)) { cancelled.delete(userKey); return { ok: false, reason: 'cancelled' }; }
     log(`[${bot.id}] codex done, reply length:`, reply.length);
     const chunks = chunkText(reply, 1500).slice(0, 3);
     if (notifyQQ && chan) {
-      let seq = msgSeq + 1;
-      for (const c of chunks) { if (!(await chan.send(c, msgId, seq++))) break; }
-      if (chunks.length > 3) await chan.send('（内容过长，已截断）', msgId, seq);
+      for (const c of chunks) { if (!(await chan.send(c, msgId, nextSeq++))) break; }
+      if (chunks.length > 3) await chan.send('（内容过长，已截断）', msgId, nextSeq++);
     }
     pushChat(bot, { role: 'codex', text: reply });
     appendTranscript(bot, 'Codex', reply);
@@ -543,12 +565,14 @@ async function processBotText(bot, prompt, displayText, { chan = null, msgId = n
     return { ok: true, reply };
   } catch (e) {
     log(`[${bot.id}] codex error:`, e.message);
+    if (cancelled.has(userKey)) { cancelled.delete(userKey); return { ok: false, reason: 'cancelled' }; }
     const errText = '处理出错：' + String(e.message).slice(0, 200);
     if (notifyQQ && chan) await chan.send(errText, msgId, msgSeq + 1);
     pushChat(bot, { role: 'codex', text: errText });
     broadcast({ type: 'chat', bot: bot.id, entry: chatLogs.get(bot.id).slice(-1)[0] });
     return { ok: false, error: String(e.message) };
   } finally {
+    clearTimeout(progressTimer);
     running.delete(userKey);
     broadcastStatus(bot);
   }
@@ -558,7 +582,7 @@ const PANEL_HTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>我是机器人 v1.0.5</title>
+<title>我是机器人 v1.0.8</title>
 <style>
 body{font-family:system-ui,"Microsoft YaHei",sans-serif;margin:0;background:#f5f6f8;color:#222}
 header{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-bottom:1px solid #e3e5e8}
@@ -585,7 +609,7 @@ button.ghost{background:#fff;color:#1f6feb;border:1px solid #1f6feb}
 </head>
 <body>
 <header>
-<h1>我是机器人 v1.0.5</h1>
+<h1>我是机器人 v1.0.8</h1>
   <div id="bots"></div>
   <button class="ghost" id="icloud" title="在资源管理器中打开 iCloud Codex 文件夹">打开 iCloud 文件夹</button>
 </header>
@@ -724,6 +748,36 @@ function startPanelServer() {
           if (pushQQ && !chan) result.pushNote = '该机器人还没有最近的QQ会话，本次未推送到QQ';
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(result));
+        });
+      } else if (req.method === 'POST' && p === '/api/notify') {
+        let body = '';
+        req.on('data', c => { body += c; });
+        req.on('end', async () => {
+          let data = {};
+          try { data = JSON.parse(body); } catch {}
+          const bot = cfg.bots.find(b => b.id === data.bot);
+          const msg = String(data.message || '').trim();
+          if (!bot || !msg) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: '缺少 bot 或 message' }));
+            return;
+          }
+          const openid = (data.openid && cfg.allowedOpenids.includes(data.openid))
+            ? data.openid
+            : (botLastContact.get(bot.id) || '');
+          if (!openid) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: '没有可推送的QQ会话目标。请先让用户给该机器人发一条QQ消息，或传入白名单内的 openid。' }));
+            return;
+          }
+          try {
+            await sendC2CText(bot, openid, msg, null, 1);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, to: openid }));
+          } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: e.message }));
+          }
         });
       } else if (req.method === 'POST' && p === '/api/open-icloud') {
         try {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>我是机器人 v1.0.5</title>
+<title>我是机器人 v1.0.8</title>
 <style>
 :root{
   --g1:#8ecdfc; --g2:#a89cf8; --g3:#e4b1f5; --g4:#ffa8cf; --g5:#8fe0da;
@@ -130,20 +130,20 @@ main{display:flex;flex-direction:column;height:calc(100vh - 112px)}
 #input{
   flex:1;padding:8px 14px;border:1px solid var(--border);border-radius:19px;
   background:var(--surface-strong);color:var(--text);font-size:13px;resize:none;font-family:inherit;outline:none;
+  max-height:120px;overflow-y:auto;line-height:1.4;
   -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
 }
 #input::placeholder{color:var(--muted)}
 #input:focus{border-color:var(--accent)}
 #send{width:52px;height:38px;border:none;border-radius:19px;background:var(--accent);color:#fff;cursor:pointer;font-size:15px;box-shadow:var(--shadow)}
-#pushLabel{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none}
-#pushLabel input{accent-color:var(--accent);cursor:pointer}
+#stopBtn{height:38px;padding:0 12px;border:1px solid var(--border);border-radius:19px;background:var(--surface);color:var(--text);cursor:pointer;font-size:12px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
 #toast{position:fixed;bottom:76px;left:50%;transform:translateX(-50%);background:rgba(28,28,34,.88);color:#fff;padding:8px 14px;border-radius:10px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:99;max-width:80%}
 #empty{color:var(--muted);text-align:center;margin-top:40px}
 </style>
 </head>
 <body>
 <header>
-<div class="row"><h1>我是机器人 v1.0.5</h1><div id="bots"></div></div>
+<div class="row"><h1>我是机器人 v1.0.8</h1><div id="bots"></div></div>
   <div class="toolbar">
     <button class="mode-btn" id="mode" title="浅色/深色">◐</button>
     <div class="dots" id="tints"></div>
@@ -154,7 +154,7 @@ main{display:flex;flex-direction:column;height:calc(100vh - 112px)}
   <div id="msgs"><div id="empty">加载中…</div></div>
   <div id="composer">
     <textarea id="input" rows="1" placeholder="以当前机器人身份发送…"></textarea>
-    <label id="pushLabel"><input type="checkbox" id="pushQQ" checked>同步到QQ</label>
+    <button id="stopBtn" title="停止当前任务">停止</button>
     <button id="send" title="发送">↑</button>
   </div>
 </main>
@@ -255,16 +255,21 @@ $('#send').onclick = async () => {
   const msg = $('#input').value.trim();
   if (!msg || !state.current) return;
   $('#input').value = '';
-  localStorage.setItem('qqp_pushqq', $('#pushQQ').checked ? '1' : '0');
-  const resp = await fetch('/api/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, message: msg, pushQQ: $('#pushQQ').checked }) });
+  $('#input').style.height = 'auto';
+  const resp = await fetch('/api/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, message: msg, pushQQ: true }) });
   try { const j = await resp.json(); if (j.pushNote) toast(j.pushNote); } catch(err){}
 };
-$('#input').addEventListener('keydown', e => {
+$('#stopBtn').onclick = () => {
+  if (!state.current) return;
+  fetch('/api/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, message: '停止', pushQQ: false }) });
+};
+const inputEl = $('#input');
+const autoResize = () => { inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px'; };
+inputEl.addEventListener('input', autoResize);
+inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#send').click(); }
-  this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px';
 });
 $('#icloud').onclick = () => fetch('/api/open-icloud', { method:'POST' });
-$('#pushQQ').checked = localStorage.getItem('qqp_pushqq') !== '0';
 applyTheme(); loadBots(); connectSSE();
 </script>
 </body>
