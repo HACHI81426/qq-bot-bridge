@@ -1,12 +1,8 @@
-// QQ Bot Bridge - QQ 官方机器人桥接本机 Codex CLI
-// Author: 8!!
-// GitHub: https://github.com/HACHI81426
-
 import { spawn, execFile } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 
@@ -51,7 +47,7 @@ let bots = [];
 try {
   const arr = JSON.parse(env.QQBOTS_JSON || '[]');
   bots = arr.filter(b => b && b.appId && b.clientSecret)
-    .map(b => ({ id: b.accountId || b.appId, name: b.name || b.accountId || b.appId, appId: b.appId, clientSecret: b.clientSecret }));
+    .map(b => ({ id: b.accountId || b.appId, name: b.name || b.accountId || b.appId, appId: b.appId, clientSecret: b.clientSecret, projectDir: b.workDir || null }));
 } catch (e) { console.log('QQBOTS_JSON parse error:', e.message); }
 if (!bots.length && env.QQBOT_APP_ID && env.QQBOT_CLIENT_SECRET) {
   bots = [{ id: 'default', appId: env.QQBOT_APP_ID, clientSecret: env.QQBOT_CLIENT_SECRET }];
@@ -83,6 +79,26 @@ const cfg = {
   bots,
 };
 
+const SETTINGS_FILE = path.join(BRIDGE_DIR, 'data', 'settings.json');
+const savedSettings = (() => {
+  try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { return {}; }
+})();
+cfg.broadcastNotify = {};
+const savedBcast = savedSettings.broadcastNotify;
+if (typeof savedBcast === 'object' && savedBcast !== null) {
+  for (const b of bots) cfg.broadcastNotify[b.id] = savedBcast[b.id] === true;
+} else {
+  for (const b of bots) cfg.broadcastNotify[b.id] = savedBcast === true;
+}
+function persistSettings() {
+  try {
+    mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+    writeFileSync(SETTINGS_FILE, JSON.stringify({ broadcastNotify: cfg.broadcastNotify }));
+  } catch (e) { log('persist settings error:', e.message); }
+}
+
+for (const b of bots) if (!b.projectDir) b.projectDir = cfg.workDir;
+
 mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 mkdirSync(OUT_DIR, { recursive: true });
 mkdirSync(cfg.workDir, { recursive: true });
@@ -94,6 +110,29 @@ function log(...args) {
   try { appendFileSync(LOG_FILE, line + '\n'); } catch {}
   console.log(line);
 }
+
+// 定位 codex CLI：优先显式配置的路径，其次扫描 OpenAI Codex bin 目录下最新的 codex.exe（客户端更新会换哈希目录），最后回退 PATH
+function resolveCodexCli(configured) {
+  if (configured && configured !== 'codex' && existsSync(configured)) return configured;
+  const binRoot = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin') : null;
+  if (binRoot && existsSync(binRoot)) {
+    let best = null;
+    let bestTime = 0;
+    for (const name of readdirSync(binRoot)) {
+      const cand = path.join(binRoot, name, 'codex.exe');
+      try {
+        if (existsSync(cand) && statSync(cand).isFile()) {
+          const t = statSync(cand).mtimeMs;
+          if (t > bestTime) { bestTime = t; best = cand; }
+        }
+      } catch {}
+    }
+    if (best) return best;
+  }
+  return configured || 'codex';
+}
+const codexCliResolved = resolveCodexCli(cfg.codexCli);
+if (codexCliResolved !== cfg.codexCli) log('codex CLI 路径自动解析为:', codexCliResolved);
 
 // ---------- QQ API ----------
 async function getAccessToken(bot, force = false) {
@@ -192,6 +231,93 @@ const activeProcs = new Map(); // openid -> child（当前运行的 Codex 进程
 const cancelled = new Set();   // openid -> 已请求停止
 const STOP_RE = /^(停止|停|stop|cancel|取消|中断|终止)$/i;
 
+// ---------- 话题（每个机器人多个聊天） ----------
+const TOPICS_FILE = path.join(BRIDGE_DIR, 'data', 'topics.json');
+const topicsState = (() => { try { return JSON.parse(readFileSync(TOPICS_FILE, 'utf8')); } catch { return {}; } })();
+const pendingNaming = new Map(); // bot.id -> topicId（等待用户命名）
+const pendingTopic = new Map();  // bot.id -> true（等待用户回复编号选择话题）
+const pendingRename = new Map(); // bot.id -> topicId（等待用户回复新名称）
+function persistTopics() {
+  try {
+    mkdirSync(path.dirname(TOPICS_FILE), { recursive: true });
+    writeFileSync(TOPICS_FILE, JSON.stringify(topicsState));
+  } catch (e) { log('persist topics error:', e.message); }
+}
+function botTopics(bot) {
+  if (!topicsState[bot.id]) topicsState[bot.id] = { current: null, topics: {} };
+  return topicsState[bot.id];
+}
+function topicFile(bot, topicId) { return path.join(bot.workDir, 'topics', topicId + '.txt'); }
+function ensureTopic(bot) {
+  const st = botTopics(bot);
+  if (!st.current || !st.topics[st.current]) {
+    const id = 't' + Date.now().toString(36);
+    st.topics[id] = { name: '默认', threadId: null, createdAt: Date.now(), lastActiveAt: Date.now(), archived: false };
+    st.current = id;
+    try {
+      if (existsSync(bot.transcriptFile)) mkdirSync(path.join(bot.workDir, 'topics'), { recursive: true });
+      if (existsSync(bot.transcriptFile) && !existsSync(topicFile(bot, id))) {
+        writeFileSync(topicFile(bot, id), readFileSync(bot.transcriptFile, 'utf8'));
+      }
+    } catch {}
+    persistTopics();
+  }
+  return st.current;
+}
+function activeTopicList(bot) {
+  const st = botTopics(bot);
+  return Object.keys(st.topics)
+    .filter(id => !st.topics[id].archived)
+    .map(id => ({ id, name: st.topics[id].name, lastActiveAt: st.topics[id].lastActiveAt }))
+    .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+}
+function newTopic(bot, name) {
+  const st = botTopics(bot);
+  const id = 't' + Date.now().toString(36);
+  st.topics[id] = { name: String(name || '').trim() || '新话题', threadId: null, createdAt: Date.now(), lastActiveAt: Date.now(), archived: false };
+  st.current = id;
+  persistTopics();
+  return id;
+}
+function switchTopic(bot, topicId) {
+  const st = botTopics(bot);
+  if (!st.topics[topicId]) return null;
+  st.current = topicId;
+  st.topics[topicId].lastActiveAt = Date.now();
+  persistTopics();
+  return topicId;
+}
+function archiveTopic(bot, topicId) {
+  const st = botTopics(bot);
+  if (!st.topics[topicId] || st.topics[topicId].archived) return false;
+  st.topics[topicId].archived = true;
+  if (st.current === topicId) {
+    const active = Object.keys(st.topics).filter(id => !st.topics[id].archived && id !== topicId);
+    st.current = active.length ? active.sort((a, b) => st.topics[b].lastActiveAt - st.topics[a].lastActiveAt)[0] : null;
+  }
+  persistTopics();
+  return true;
+}
+function broadcastTopics(bot) {
+  const st = botTopics(bot);
+  broadcast({ type: 'topic', bot: bot.id, current: st.current, topics: activeTopicList(bot) });
+}
+function topicListText(bot) {
+  const list = activeTopicList(bot);
+  if (!list.length) return '暂无话题。';
+  return '话题列表：\n' + list.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
+}
+function resolveTopicRef(bot, ref) {
+  const st = botTopics(bot);
+  if (st.topics[ref]) return ref;
+  if (/^\d+$/.test(String(ref))) {
+    const list = activeTopicList(bot);
+    const idx = Number(ref) - 1;
+    if (idx >= 0 && idx < list.length) return list[idx].id;
+  }
+  return null;
+}
+
 function parseThreadId(jsonl) {
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue;
@@ -216,15 +342,25 @@ function chunkText(text, max = 1500) {
   return chunks.length ? chunks : ['（无输出）'];
 }
 
-function runCodex(prompt, openid, workDir = cfg.workDir) {
+// 杀 Codex 进程树（Windows 上 child.kill() 只杀主进程，会留下孤儿进程继续占用线程写锁）
+function killTree(child) {
+  try { child.kill(); } catch {}
+  if (child && child.pid) {
+    try {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } catch {}
+  }
+}
+
+function runCodex(prompt, openid, workDir = cfg.workDir, threadKey = openid) {
   return new Promise((resolve, reject) => {
     const outFile = path.join(OUT_DIR, `${Date.now()}-${randomUUID().slice(0, 8)}.txt`);
     let args = ['exec', '--json', '--skip-git-repo-check', '-C', workDir, '--dangerously-bypass-approvals-and-sandbox', '-o', outFile];
-    const prev = sessions.get(openid);
+    const prev = sessions.get(threadKey);
     if (prev) args.push('resume', prev);
     args.push(prompt);
 
-    const child = spawn(cfg.codexCli, args, {
+    const child = spawn(codexCliResolved, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -237,25 +373,40 @@ function runCodex(prompt, openid, workDir = cfg.workDir) {
     activeProcs.set(openid, child);
 
     let jsonBuf = '';
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch {}
+    let settled = false;
+    const finish = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      activeProcs.delete(openid);
+      fn(val);
+    };
+    const timer = cfg.codexTimeoutMs > 0 ? setTimeout(() => {
+      killTree(child);
       reject(new Error('Codex 处理超时'));
-    }, cfg.codexTimeoutMs);
+    }, cfg.codexTimeoutMs) : null;
 
     child.stdout.on('data', d => { jsonBuf += d.toString(); });
     child.stderr.on('data', () => {});
-    child.on('error', err => { clearTimeout(timer); activeProcs.delete(openid); reject(err); });
+    child.on('error', err => finish(reject, err));
     child.on('close', code => {
-      clearTimeout(timer);
-      activeProcs.delete(openid);
       try {
         const thread = parseThreadId(jsonBuf);
-        if (thread) sessions.set(openid, thread);
+        if (thread) sessions.set(threadKey, thread);
         const out = existsSync(outFile) ? readFileSync(outFile, 'utf8').trim() : '';
-        resolve(out || '（无输出）');
+        finish(resolve, out || '（无输出）');
       } catch (e) {
-        reject(e);
+        finish(reject, e);
       }
+    });
+    // 进程已退出但 close 迟迟不来（子进程继承 stdout 管道）时的兜底，防止任务状态永久卡住
+    child.on('exit', () => {
+      setTimeout(() => {
+        if (settled) return;
+        let out = '';
+        try { out = existsSync(outFile) ? readFileSync(outFile, 'utf8').trim() : ''; } catch {}
+        finish(resolve, out || '（无输出）');
+      }, 5000);
     });
   });
 }
@@ -289,6 +440,19 @@ function persistLastContact() {
     mkdirSync(path.dirname(LAST_CONTACT_FILE), { recursive: true });
     writeFileSync(LAST_CONTACT_FILE, JSON.stringify(Object.fromEntries(botLastContact)));
   } catch (e) { log('persist last contact error:', e.message); }
+}
+const CONTACTS_FILE = path.join(BRIDGE_DIR, 'data', 'contacts.json');
+const botContacts = new Map((() => {
+  try {
+    const o = JSON.parse(readFileSync(CONTACTS_FILE, 'utf8'));
+    return Object.entries(o);
+  } catch { return []; }
+})());
+function persistContacts() {
+  try {
+    mkdirSync(path.dirname(CONTACTS_FILE), { recursive: true });
+    writeFileSync(CONTACTS_FILE, JSON.stringify(Object.fromEntries(botContacts)));
+  } catch (e) { log('persist contacts error:', e.message); }
 }
 const watchSeen = (() => {
   try { return JSON.parse(readFileSync(WATCH_SEEN_FILE, 'utf8')); } catch { return {}; }
@@ -365,12 +529,12 @@ function backfillHistoryFromLog(bot) {
     }
     if (!hits.length) return;
     let existing = [];
-    try { existing = readFileSync(bot.transcriptFile, 'utf8').split(/\r?\n/).filter(Boolean); } catch {}
+    try { existing = readFileSync(topicFile(bot, ensureTopic(bot)), 'utf8').split(/\r?\n/).filter(Boolean); } catch {}
     const seen = new Set(existing);
     const toAdd = hits.filter(h => !seen.has(h));
     if (toAdd.length) {
       const out = existing.concat(toAdd).sort();
-      writeFileSync(bot.transcriptFile, out.join('\n') + '\n');
+      writeFileSync(topicFile(bot, ensureTopic(bot)), out.join('\n') + '\n');
       log(`[${bot.id}] backfilled ${toAdd.length} historical messages`);
     }
   } catch (e) { log('backfill error:', e.message); }
@@ -402,7 +566,8 @@ function isBridgeSession(file) {
     const cwd = norm(meta.cwd);
     const wd = norm(cfg.workDir);
     const cr = norm(chatRoot);
-    return cwd === wd || (!!cr && (cwd === cr || cwd.startsWith(cr + '/')));
+    const dirs = [wd, ...bots.map(x => x.projectDir).filter(Boolean).map(norm)];
+    return dirs.includes(cwd) || (!!cr && (cwd === cr || cwd.startsWith(cr + '/')));
   } catch { return false; }
 }
 
@@ -450,7 +615,7 @@ function backfillRepliesFromSessions(bot) {
     const logMsgs = parseLogMessages(bot.id);
     if (!logMsgs.length) return;
     let existing = [];
-    try { existing = readFileSync(bot.transcriptFile, 'utf8').split(/\r?\n/).filter(Boolean); } catch {}
+    try { existing = readFileSync(topicFile(bot, ensureTopic(bot)), 'utf8').split(/\r?\n/).filter(Boolean); } catch {}
     const seen = new Set(existing);
     const toAdd = [];
     for (const f of walkBridgeSessions(cfg.codexHome)) {
@@ -475,29 +640,31 @@ function backfillRepliesFromSessions(bot) {
     }
     if (toAdd.length) {
       const out = existing.concat(toAdd).sort();
-      writeFileSync(bot.transcriptFile, out.join('\n') + '\n');
+      writeFileSync(topicFile(bot, ensureTopic(bot)), out.join('\n') + '\n');
       log(`[${bot.id}] backfilled ${toAdd.length} LLM replies from sessions`);
     }
   } catch (e) { log('reply backfill error:', e.message); }
 }
 
-function loadTranscriptHistory(bot) {
+function loadTranscriptHistory(bot, topicId) {
+  const key = bot.id + ':' + topicId;
   try {
-    const text = readFileSync(bot.transcriptFile, 'utf8');
+    const text = readFileSync(topicFile(bot, topicId), 'utf8');
     const entries = [];
     for (const line of text.split(/\r?\n/)) {
       if (!line.trim()) continue;
       const m = line.match(/^\[(.*?)\] (用户|Codex): (.*)$/);
       if (m) entries.push({ ts: m[1], role: m[2] === '用户' ? 'user' : 'codex', text: m[3] });
     }
-    chatLogs.set(bot.id, entries.slice(-MAX_LOG));
-  } catch { chatLogs.set(bot.id, []); }
+    chatLogs.set(key, entries.slice(-MAX_LOG));
+  } catch { chatLogs.set(key, []); }
 }
 
-function pushChat(bot, entry) {
-  const arr = chatLogs.get(bot.id) || [];
+function pushChat(bot, topicId, entry) {
+  const key = bot.id + ':' + topicId;
+  const arr = chatLogs.get(key) || [];
   arr.push({ ts: new Date().toLocaleString('zh-CN', { hour12: false }), role: entry.role, text: entry.text });
-  chatLogs.set(bot.id, arr.slice(-MAX_LOG));
+  chatLogs.set(key, arr.slice(-MAX_LOG));
 }
 
 function broadcast(payload) {
@@ -523,15 +690,136 @@ function buildPrompt(bot, content) {
   return prompt;
 }
 
+async function respondCommand(bot, topicId, text, chan, msgId, msgSeq, notifyQQ) {
+  pushChat(bot, topicId, { role: 'codex', text });
+  appendTranscript(bot, topicId, 'Codex', text);
+  const arr = chatLogs.get(bot.id + ':' + topicId);
+  if (arr && arr.length) broadcast({ type: 'chat', bot: bot.id, topic: topicId, entry: arr[arr.length - 1] });
+  if (notifyQQ && chan) await chan.send(text, msgId, msgSeq + 1).catch(() => {});
+}
+
 async function processBotText(bot, prompt, displayText, { chan = null, msgId = null, msgSeq = 1, notifyQQ = false, userKey = `qq:${bot.id}` } = {}) {
-  pushChat(bot, { role: 'user', text: displayText });
-  appendTranscript(bot, '用户', displayText);
-  broadcast({ type: 'chat', bot: bot.id, entry: chatLogs.get(bot.id).slice(-1)[0] });
-  if (STOP_RE.test(String(displayText || '').trim())) {
+  const topicId = ensureTopic(bot);
+  const t = String(displayText || '').trim();
+  pushChat(bot, topicId, { role: 'user', text: displayText });
+  appendTranscript(bot, topicId, '用户', displayText);
+  broadcast({ type: 'chat', bot: bot.id, topic: topicId, entry: chatLogs.get(bot.id + ':' + topicId).slice(-1)[0] });
+
+  const helpRe = /^(帮助|help|菜单|指令)$/i;
+  const newRe = /^新话题(?:\s+(.+))?$/;
+  const listRe = /^(话题列表|列表)$/;
+  const switchRe = /^切换话题(?:\s+(\S+))?$/;
+  const archiveRe = /^归档话题(?:\s+(\S+))?$/;
+  const renameRe = /^重命名(?:话题)?(?:\s+(\S+))?$/;
+  const HELP_TEXT = '可用指令：\n新话题 [名称] - 新建聊天\n话题列表 - 查看聊天列表\n切换话题 <编号> - 切换聊天\n归档话题 <编号> - 归档聊天\n重命名 - 重命名当前话题\n停止 - 终止当前任务';
+  const st = botTopics(bot);
+  if (pendingNaming.has(bot.id)) {
+    const pt = pendingNaming.get(bot.id);
+    const isCmd = helpRe.test(t) || newRe.test(t) || listRe.test(t) || switchRe.test(t) || archiveRe.test(t) || renameRe.test(t) || STOP_RE.test(t);
+    if (isCmd) {
+      pendingNaming.delete(bot.id);
+    } else {
+      const name = String(displayText || '').trim().slice(0, 30);
+      if (name && botTopics(bot).topics[pt]) botTopics(bot).topics[pt].name = name;
+      persistTopics();
+      pendingNaming.delete(bot.id);
+      broadcastTopics(bot);
+      await respondCommand(bot, pt, '已命名话题：' + (name || '新话题'), chan, msgId, msgSeq, notifyQQ);
+      return { ok: true, action: 'named', topic: pt };
+    }
+  }
+  if (pendingRename.has(bot.id)) {
+    const rt = pendingRename.get(bot.id);
+    const isCmd = helpRe.test(t) || newRe.test(t) || listRe.test(t) || switchRe.test(t) || archiveRe.test(t) || renameRe.test(t) || STOP_RE.test(t);
+    if (isCmd) {
+      pendingRename.delete(bot.id);
+    } else {
+      const name = String(displayText || '').trim().slice(0, 30);
+      if (name && botTopics(bot).topics[rt]) botTopics(bot).topics[rt].name = name;
+      persistTopics();
+      pendingRename.delete(bot.id);
+      broadcastTopics(bot);
+      await respondCommand(bot, rt, '已重命名话题：' + (name || ''), chan, msgId, msgSeq, notifyQQ);
+      return { ok: true, action: 'renamed', topic: rt };
+    }
+  }
+  if (pendingTopic.has(bot.id)) {
+    if (/^\d+$/.test(t)) {
+      pendingTopic.delete(bot.id);
+      const target = resolveTopicRef(bot, t);
+      if (!target) {
+        await respondCommand(bot, topicId, '编号无效。' + topicListText(bot), chan, msgId, msgSeq, notifyQQ);
+        return { ok: true, action: 'list' };
+      }
+      switchTopic(bot, target);
+      pendingNaming.delete(bot.id);
+      broadcastTopics(bot);
+      await respondCommand(bot, target, '已切换到话题：' + botTopics(bot).topics[target].name, chan, msgId, msgSeq, notifyQQ);
+      return { ok: true, action: 'switch', topic: target };
+    }
+    pendingTopic.delete(bot.id);
+  }
+  if (helpRe.test(t)) {
+    await respondCommand(bot, topicId, HELP_TEXT, chan, msgId, msgSeq, notifyQQ);
+    return { ok: true, help: true };
+  }
+  if (newRe.test(t)) {
+    const m = t.match(newRe);
+    const id = newTopic(bot, m && m[1]);
+    broadcastTopics(bot);
+    if (notifyQQ && chan) {
+      pendingNaming.set(bot.id, id);
+      await respondCommand(bot, id, '已新建话题。请命名本话题（直接回复名称即可）。', chan, msgId, msgSeq, notifyQQ);
+    } else {
+      await respondCommand(bot, id, '已新建话题：' + botTopics(bot).topics[id].name, chan, msgId, msgSeq, notifyQQ);
+    }
+    return { ok: true, action: 'new', topic: id };
+  }
+  if (listRe.test(t)) {
+    await respondCommand(bot, topicId, topicListText(bot), chan, msgId, msgSeq, notifyQQ);
+    return { ok: true, action: 'list' };
+  }
+  if (switchRe.test(t)) {
+    const m = t.match(switchRe);
+    const target = m && m[1] ? resolveTopicRef(bot, m[1]) : null;
+    if (!target) {
+      pendingTopic.set(bot.id, true);
+      await respondCommand(bot, topicId, '请回复编号选择话题：\n' + topicListText(bot), chan, msgId, msgSeq, notifyQQ);
+      return { ok: true, action: 'list' };
+    }
+    switchTopic(bot, target);
+    pendingNaming.delete(bot.id);
+    broadcastTopics(bot);
+    await respondCommand(bot, target, '已切换到话题：' + st.topics[target].name, chan, msgId, msgSeq, notifyQQ);
+    return { ok: true, action: 'switch', topic: target };
+  }
+  if (archiveRe.test(t)) {
+    const m = t.match(archiveRe);
+    const target = m && m[1] ? (resolveTopicRef(bot, m[1]) || st.current) : st.current;
+    const ok = archiveTopic(bot, target);
+    pendingNaming.delete(bot.id);
+    broadcastTopics(bot);
+    await respondCommand(bot, botTopics(bot).current || topicId, ok ? '已归档话题。' : '未找到该话题。', chan, msgId, msgSeq, notifyQQ);
+    return { ok: true, action: 'archive' };
+  }
+  if (renameRe.test(t)) {
+    const m = t.match(renameRe);
+    const target = m && m[1] ? (resolveTopicRef(bot, m[1]) || st.current) : st.current;
+    if (!st.topics[target]) {
+      await respondCommand(bot, topicId, '未找到该话题。', chan, msgId, msgSeq, notifyQQ);
+      return { ok: true, action: 'rename-ask' };
+    }
+    pendingRename.set(bot.id, target);
+    await respondCommand(bot, topicId, '请回复新名称（直接回复名称即可）。', chan, msgId, msgSeq, notifyQQ);
+    return { ok: true, action: 'rename-ask', topic: target };
+  }
+
+  if (STOP_RE.test(t)) {
     const proc = activeProcs.get(userKey);
-    if (running.get(userKey) && proc) {
-      try { proc.kill(); } catch {}
+    if (running.get(userKey)) {
+      if (proc) killTree(proc);
       cancelled.add(userKey);
+      running.delete(userKey);
       if (notifyQQ && chan) await chan.send('已停止当前任务。', msgId, msgSeq + 1).catch(() => {});
       return { ok: false, reason: 'cancelled' };
     }
@@ -545,13 +833,17 @@ async function processBotText(bot, prompt, displayText, { chan = null, msgId = n
   running.set(userKey, true);
   broadcastStatus(bot);
   let nextSeq = msgSeq + 1;
-  const progressTimer = setTimeout(() => {
-    if (notifyQQ && chan && running.get(userKey)) {
-      chan.send('任务仍在处理中（已超过 1 分钟），可发送"停止"取消。', msgId, nextSeq++).catch(() => {});
-    }
-  }, 60000);
+  let progressTimer = null;
+  const progressPing = () => {
+    if (!running.get(userKey)) return;
+    const proc = activeProcs.get(userKey);
+    if (!proc || proc.exitCode !== null) { running.delete(userKey); return; }
+    if (notifyQQ && chan) chan.send('处理中…', msgId, nextSeq++).catch(() => {});
+    progressTimer = setTimeout(progressPing, 120000);
+  };
+  progressTimer = setTimeout(progressPing, 120000);
   try {
-    const reply = await runCodex(prompt, userKey, cfg.workDir);
+    const reply = await runCodex(prompt, userKey, bot.projectDir, userKey + ':' + topicId);
     if (cancelled.has(userKey)) { cancelled.delete(userKey); return { ok: false, reason: 'cancelled' }; }
     log(`[${bot.id}] codex done, reply length:`, reply.length);
     const chunks = chunkText(reply, 1500).slice(0, 3);
@@ -559,17 +851,17 @@ async function processBotText(bot, prompt, displayText, { chan = null, msgId = n
       for (const c of chunks) { if (!(await chan.send(c, msgId, nextSeq++))) break; }
       if (chunks.length > 3) await chan.send('（内容过长，已截断）', msgId, nextSeq++);
     }
-    pushChat(bot, { role: 'codex', text: reply });
-    appendTranscript(bot, 'Codex', reply);
-    broadcast({ type: 'chat', bot: bot.id, entry: chatLogs.get(bot.id).slice(-1)[0] });
+    pushChat(bot, topicId, { role: 'codex', text: reply });
+    appendTranscript(bot, topicId, 'Codex', reply);
+    broadcast({ type: 'chat', bot: bot.id, topic: topicId, entry: chatLogs.get(bot.id + ':' + topicId).slice(-1)[0] });
     return { ok: true, reply };
   } catch (e) {
     log(`[${bot.id}] codex error:`, e.message);
     if (cancelled.has(userKey)) { cancelled.delete(userKey); return { ok: false, reason: 'cancelled' }; }
     const errText = '处理出错：' + String(e.message).slice(0, 200);
     if (notifyQQ && chan) await chan.send(errText, msgId, msgSeq + 1);
-    pushChat(bot, { role: 'codex', text: errText });
-    broadcast({ type: 'chat', bot: bot.id, entry: chatLogs.get(bot.id).slice(-1)[0] });
+    pushChat(bot, topicId, { role: 'codex', text: errText });
+    broadcast({ type: 'chat', bot: bot.id, topic: topicId, entry: chatLogs.get(bot.id + ':' + topicId).slice(-1)[0] });
     return { ok: false, error: String(e.message) };
   } finally {
     clearTimeout(progressTimer);
@@ -582,7 +874,7 @@ const PANEL_HTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>我是机器人 v1.0.8</title>
+        <title>我是机器人 v1.0.20</title>
 <style>
 body{font-family:system-ui,"Microsoft YaHei",sans-serif;margin:0;background:#f5f6f8;color:#222}
 header{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-bottom:1px solid #e3e5e8}
@@ -609,7 +901,7 @@ button.ghost{background:#fff;color:#1f6feb;border:1px solid #1f6feb}
 </head>
 <body>
 <header>
-<h1>我是机器人 v1.0.8</h1>
+        <h1>我是机器人 v1.0.20</h1>
   <div id="bots"></div>
   <button class="ghost" id="icloud" title="在资源管理器中打开 iCloud Codex 文件夹">打开 iCloud 文件夹</button>
 </header>
@@ -718,8 +1010,84 @@ function startPanelServer() {
         res.end(JSON.stringify(cfg.bots.map(b => ({ id: b.id, name: b.name, status: botStatus(b) }))));
       } else if (req.method === 'GET' && p === '/api/chat') {
         const bot = cfg.bots.find(b => b.id === url.searchParams.get('bot'));
+        let topic = url.searchParams.get('topic');
+        if (bot) {
+          if (!topic) topic = ensureTopic(bot);
+          loadTranscriptHistory(bot, topic);
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(bot ? (chatLogs.get(bot.id) || []) : []));
+        res.end(JSON.stringify(bot && topic ? (chatLogs.get(bot.id + ':' + topic) || []) : []));
+      } else if (req.method === 'GET' && p === '/api/topics') {
+        const bot = cfg.bots.find(b => b.id === url.searchParams.get('bot'));
+        let out = { ok: false };
+        if (bot) {
+          const cur = ensureTopic(bot);
+          out = { ok: true, current: cur, topics: activeTopicList(bot) };
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(out));
+      } else if (req.method === 'POST' && p === '/api/topic') {
+        let body = '';
+        req.on('data', c => { body += c; });
+        req.on('end', async () => {
+          let data = {};
+          try { data = JSON.parse(body); } catch {}
+          const bot = cfg.bots.find(b => b.id === data.bot);
+          if (!bot) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: '缺少 bot' }));
+            return;
+          }
+          const action = String(data.action || '');
+          const st = botTopics(bot);
+          const topic = String(data.topic || '');
+          let msg = '';
+          if (action === 'new') {
+            const id = newTopic(bot, data.name);
+            msg = '已新建话题：' + botTopics(bot).topics[id].name;
+          } else if (action === 'switch') {
+            if (!st.topics[topic]) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ ok: false, error: '未找到话题' }));
+              return;
+            }
+            switchTopic(bot, topic);
+            msg = '已切换到话题：' + st.topics[topic].name;
+          } else if (action === 'archive') {
+            const target = topic && st.topics[topic] ? topic : st.current;
+            if (!archiveTopic(bot, target)) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ ok: false, error: '未找到话题' }));
+              return;
+            }
+            msg = '已归档话题。';
+          } else if (action === 'rename') {
+            const name = String(data.name || '').trim().slice(0, 30);
+            if (!name) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ ok: false, error: '缺少名称' }));
+              return;
+            }
+            const target = topic && st.topics[topic] ? topic : st.current;
+            if (!st.topics[target]) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ ok: false, error: '未找到话题' }));
+              return;
+            }
+            st.topics[target].name = name;
+            persistTopics();
+            msg = '已重命名话题：' + name;
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: '未知操作' }));
+            return;
+          }
+          broadcastTopics(bot);
+          const openid = botLastContact.get(bot.id) || '';
+          if (openid) sendC2CText(bot, openid, msg, null, 1).catch(() => {});
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, current: botTopics(bot).current, topics: activeTopicList(bot), msg }));
+        });
       } else if (req.method === 'POST' && p === '/api/send') {
         let body = '';
         req.on('data', c => { body += c; });
@@ -762,22 +1130,39 @@ function startPanelServer() {
             res.end(JSON.stringify({ ok: false, error: '缺少 bot 或 message' }));
             return;
           }
-          const openid = (data.openid && cfg.allowedOpenids.includes(data.openid))
-            ? data.openid
-            : (botLastContact.get(bot.id) || '');
-          if (!openid) {
+          const requested = String(data.openid || '');
+          let targets = [];
+          if (requested && requested !== 'all' && cfg.allowedOpenids.includes(requested)) {
+            targets = [requested];
+          } else if (requested === 'all' || cfg.broadcastNotify[bot.id]) {
+            const list = botContacts.get(bot.id) || {};
+            targets = Object.keys(list);
+            if (!targets.length) {
+              const last = botLastContact.get(bot.id) || '';
+              if (last) targets = [last];
+            }
+          } else {
+            const last = botLastContact.get(bot.id) || '';
+            if (last) targets = [last];
+          }
+          if (!targets.length) {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, error: '没有可推送的QQ会话目标。请先让用户给该机器人发一条QQ消息，或传入白名单内的 openid。' }));
             return;
           }
-          try {
-            await sendC2CText(bot, openid, msg, null, 1);
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, to: openid }));
-          } catch (e) {
-            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, error: e.message }));
+          let sent = 0;
+          const failed = [];
+          for (const oid of targets) {
+            try {
+              if (await sendC2CText(bot, oid, msg, null, 1)) sent++;
+              else failed.push({ openid: oid, error: '发送失败（QQ 返回非 2xx）' });
+            } catch (e) {
+              failed.push({ openid: oid, error: String(e.message).slice(0, 120) });
+            }
+            if (targets.length > 1) await new Promise(r => setTimeout(r, 150));
           }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: sent > 0, sent, failed, total: targets.length }));
         });
       } else if (req.method === 'POST' && p === '/api/open-icloud') {
         try {
@@ -791,30 +1176,37 @@ function startPanelServer() {
         }
       } else if (req.method === 'GET' && p === '/api/settings') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true, icloudDir: cfg.icloudDir }));
+        res.end(JSON.stringify({ ok: true, icloudDir: cfg.icloudDir, broadcastNotify: cfg.broadcastNotify }));
       } else if (req.method === 'POST' && p === '/api/settings') {
         let body = '';
         req.on('data', c => { body += c; });
         req.on('end', () => {
           let data = {};
           try { data = JSON.parse(body); } catch {}
-          const dir = String(data.icloudDir || '').trim().replace(/[\\/]+$/, '');
-          const valid = /^[a-zA-Z]:[\\/]/.test(dir) || /^\\/.test(dir);
-          if (!valid) {
-            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, error: '路径无效，请输入本地绝对路径，如 F:\\iCloud\\iCloudDrive\\Codex' }));
-            return;
+          if (data.icloudDir !== undefined && data.icloudDir !== null) {
+            const dir = String(data.icloudDir).trim().replace(/[\\/]+$/, '');
+            const valid = /^[a-zA-Z]:[\\/]/.test(dir) || /^\\/.test(dir);
+            if (!valid) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ ok: false, error: '路径无效，请输入本地绝对路径，如 F:\\iCloud\\iCloudDrive\\Codex' }));
+              return;
+            }
+            try {
+              mkdirSync(dir, { recursive: true });
+              cfg.icloudDir = dir;
+              setEnvValue(ENV_FILE, 'ICLOUD_DIR', dir);
+            } catch (e) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ ok: false, error: e.message }));
+              return;
+            }
           }
-          try {
-            mkdirSync(dir, { recursive: true });
-            cfg.icloudDir = dir;
-            setEnvValue(ENV_FILE, 'ICLOUD_DIR', dir);
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, icloudDir: dir }));
-          } catch (e) {
-            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, error: e.message }));
+          if (typeof data.broadcastNotify === 'boolean' && data.bot && cfg.broadcastNotify[data.bot] !== undefined) {
+            cfg.broadcastNotify[data.bot] = data.broadcastNotify;
+            persistSettings();
           }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, icloudDir: cfg.icloudDir, broadcastNotify: cfg.broadcastNotify }));
         });
       } else if (req.method === 'GET' && p === '/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -832,11 +1224,12 @@ function startPanelServer() {
 }
 
 // ---------- C2C handling ----------
-function appendTranscript(bot, role, text) {
+function appendTranscript(bot, topicId, role, text) {
   try {
     const ts = fmtLogTime(new Date().toISOString());
     const line = `[${ts}] ${role}: ${String(text).replace(/\n/g, ' ').slice(0, 2000)}`;
-    appendFileSync(bot.transcriptFile, line + '\n');
+    mkdirSync(path.dirname(topicFile(bot, topicId)), { recursive: true });
+    appendFileSync(topicFile(bot, topicId), line + '\n');
   } catch (e) { log('transcript error:', e.message); }
 }
 
@@ -871,8 +1264,17 @@ async function onChatMessage(bot, d) {
   const openid = chan.sender;
   const content = (d.content || '').trim();
   const msgSeq = d.msg_seq || 1;
+  const topicId = ensureTopic(bot);
 
   if (!chan.target || !openid) return;
+  if (chan.kind === 'c2c') {
+    // 所有聊过天的用户都登记为联系人（群发推送用），不限于白名单；任务执行仍受白名单限制
+    const list = botContacts.get(bot.id) || {};
+    const uname = (d && d.author && d.author.username) ? String(d.author.username) : '';
+    list[openid] = { name: uname, lastActiveAt: Date.now() };
+    botContacts.set(bot.id, list);
+    persistContacts();
+  }
   if (!chan.allow) {
     const safeMode = !cfg.allowedOpenids.length;
     log(`[${bot.id}] ignored unauthorized sender:`, openid, 'in', chan.kind, safeMode ? '(safe mode: whitelist empty)' : '');
@@ -918,9 +1320,9 @@ async function onChatMessage(bot, d) {
     await chan.send(`已收到并归档：${summary}\n存放位置：收件箱\\${bot.name}\\${localDateStr()}\n等你下一步指示。`, msgId, msgSeq);
     recentFiles[userKey] = [...(recentFiles[userKey] || []).slice(-8), ...saved.map(s => s.path)];
     persistRecentFiles();
-    appendTranscript(bot, '用户', `[附件] ${summary}`);
-    pushChat(bot, { role: 'user', text: `[附件] ${summary}` });
-    broadcast({ type: 'chat', bot: bot.id, entry: chatLogs.get(bot.id).slice(-1)[0] });
+    appendTranscript(bot, topicId, '用户', `[附件] ${summary}`);
+    pushChat(bot, topicId, { role: 'user', text: `[附件] ${summary}` });
+    broadcast({ type: 'chat', bot: bot.id, topic: topicId, entry: chatLogs.get(bot.id + ':' + topicId).slice(-1)[0] });
     return;
   }
 
@@ -1050,9 +1452,10 @@ async function main() {
   for (const bot of cfg.bots) {
     connectGateway(bot).catch(e => log(`[${bot.id}] connect failed:`, e.message));
   }
+  for (const bot of cfg.bots) ensureTopic(bot);
   for (const bot of cfg.bots) backfillHistoryFromLog(bot);
   for (const bot of cfg.bots) backfillRepliesFromSessions(bot);
-  for (const bot of cfg.bots) loadTranscriptHistory(bot);
+  for (const bot of cfg.bots) loadTranscriptHistory(bot, ensureTopic(bot));
   startWatchDir();
   startPanelServer();
 }

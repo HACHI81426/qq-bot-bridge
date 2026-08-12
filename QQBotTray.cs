@@ -4,14 +4,44 @@ using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
 public static class QQBotTrayProgram
 {
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    private const int SW_RESTORE = 9;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const string PANEL_TITLE_KEY = "我是机器人";
 
     [STAThread]
     private static void Main(string[] args)
@@ -138,6 +168,8 @@ public static class QQBotTrayProgram
 
     private static void OpenPanel(string panelUrl)
     {
+        if (FocusExistingPanel()) return;
+
         string[] edges = new string[]
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe"),
@@ -152,6 +184,33 @@ public static class QQBotTrayProgram
             }
         }
         Process.Start(panelUrl);
+    }
+
+    // 面板窗口已存在时还原并聚焦，避免双击托盘重复开窗
+    private static bool FocusExistingPanel()
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            StringBuilder sb = new StringBuilder(512);
+            GetWindowText(hWnd, sb, sb.Capacity);
+            string title = sb.ToString();
+            if (!string.IsNullOrEmpty(title) && title.IndexOf(PANEL_TITLE_KEY, StringComparison.Ordinal) >= 0)
+            {
+                found = hWnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (found == IntPtr.Zero) return false;
+
+        if (IsIconic(found)) ShowWindow(found, SW_RESTORE);
+        SetWindowPos(found, new IntPtr(-1), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(found, new IntPtr(-2), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetForegroundWindow(found);
+        return true;
     }
 
     private static void ShowSettings(string panelUrl)

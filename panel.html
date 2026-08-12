@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>我是机器人 v1.0.8</title>
+<title>我是机器人 v1.0.20</title>
 <style>
 :root{
   --g1:#8ecdfc; --g2:#a89cf8; --g3:#e4b1f5; --g4:#ffa8cf; --g5:#8fe0da;
@@ -93,10 +93,34 @@ h1{font-size:15px;margin:0;font-weight:600;text-shadow:0 1px 2px rgba(255,255,25
 .toolbar{display:flex;align-items:center;gap:6px;margin-top:8px}
 .ghost{padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--accent);cursor:pointer;font-size:12px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
 .mode-btn{width:28px;height:28px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.switch{position:relative;display:inline-block;width:42px;height:24px;flex:none;cursor:pointer}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;inset:0;border-radius:24px;background:rgba(128,128,138,.30);border:1px solid var(--border);transition:background .2s}
+.switch .slider::before{content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:var(--shadow)}
+.switch input:checked + .slider{background:var(--accent)}
+.switch input:checked + .slider::before{transform:translateX(18px)}
 .dots{display:flex;gap:5px;align-items:center;margin-left:auto}
 .dot{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid rgba(255,255,255,.6);box-shadow:var(--shadow)}
 .dot.active{border-color:var(--text)}
-main{display:flex;flex-direction:column;height:calc(100vh - 112px)}
+#layout{display:flex;height:calc(100vh - 112px)}
+#side{width:150px;flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 8px;background:var(--surface);border-right:1px solid var(--border);-webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);overflow-y:auto}
+.sideBtns{display:flex;gap:6px}
+.sideBtns button{flex:1;padding:6px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface-strong);color:var(--text);cursor:pointer;font-size:11px}
+.sideBtns button:hover{border-color:var(--accent)}
+#topicList{display:flex;flex-direction:column;gap:4px}
+.titem{padding:7px 9px;border-radius:9px;cursor:pointer;font-size:12px;color:var(--text);border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.titem:hover{background:rgba(128,128,138,.12)}
+.titem.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.tempty{font-size:11px;color:var(--muted);text-align:center;padding:12px 0}
+#chatArea{flex:1;display:flex;flex-direction:column;min-width:0}
+#mask{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:200}
+#mask.show{display:flex}
+#nameBox{background:var(--surface-strong);border:1px solid var(--border);border-radius:14px;padding:16px;width:280px;-webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);box-shadow:var(--bubble-shadow)}
+#nameBox h3{margin:0 0 10px;font-size:14px}
+#nameBox input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);font-size:13px;outline:none;margin-bottom:10px}
+#nameBox .nbBtns{display:flex;gap:8px;justify-content:flex-end}
+#nameBox button{padding:6px 14px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);cursor:pointer;font-size:12px}
+#nameBox button.ok{background:var(--accent);border-color:var(--accent);color:#fff}
 #msgs{flex:1;overflow-y:auto;padding:12px 10px}
 #msgs::-webkit-scrollbar{width:6px}
 #msgs::-webkit-scrollbar-thumb{background:rgba(128,128,138,.35);border-radius:3px}
@@ -143,22 +167,37 @@ main{display:flex;flex-direction:column;height:calc(100vh - 112px)}
 </head>
 <body>
 <header>
-<div class="row"><h1>我是机器人 v1.0.8</h1><div id="bots"></div></div>
+<div class="row"><h1>我是机器人 v1.0.20</h1><div id="bots"></div></div>
   <div class="toolbar">
     <button class="mode-btn" id="mode" title="浅色/深色">◐</button>
+    <label class="switch" id="bcastWrap" title="群发开关：打开后，推送消息发给该机器人所有联系过的QQ用户">
+      <input type="checkbox" id="bcast">
+      <span class="slider"></span>
+    </label>
     <div class="dots" id="tints"></div>
     <button class="ghost" id="icloud" title="打开 iCloud Codex 文件夹">iCloud 文件夹</button>
   </div>
 </header>
-<main>
-  <div id="msgs"><div id="empty">加载中…</div></div>
-  <div id="composer">
-    <textarea id="input" rows="1" placeholder="以当前机器人身份发送…"></textarea>
-    <button id="stopBtn" title="停止当前任务">停止</button>
-    <button id="send" title="发送">↑</button>
-  </div>
+<main id="layout">
+  <aside id="side">
+    <div class="sideBtns">
+      <button id="newTopic" title="新建聊天">＋ 新建</button>
+      <button id="renameTopic" title="重命名当前聊天">重命名</button>
+      <button id="archiveTopic" title="归档当前聊天">归档</button>
+    </div>
+    <div id="topicList"></div>
+  </aside>
+  <section id="chatArea">
+    <div id="msgs"><div id="empty">加载中…</div></div>
+    <div id="composer">
+      <textarea id="input" rows="1" placeholder="以当前机器人身份发送…"></textarea>
+      <button id="stopBtn" title="停止当前任务">停止</button>
+      <button id="send" title="发送">↑</button>
+    </div>
+  </section>
 </main>
 <div id="toast"></div>
+<div id="mask"><div id="nameBox"><h3 id="nameTitle">命名</h3><input id="nameInput" maxlength="30" placeholder="输入名称"><div class="nbBtns"><button id="nameCancel">取消</button><button id="nameOk" class="ok">确定</button></div></div></div>
 <script>
 const TINTS = [
   ['', '蓝', '#0a84ff'],
@@ -168,7 +207,7 @@ const TINTS = [
   ['mint', '薄荷', '#00c7be'],
   ['graphite', '石墨', '#8e8e93']
 ];
-const state = { bots: [], current: null, es: null };
+const state = { bots: [], current: null, es: null, topics: [], topic: null };
 const $ = s => document.querySelector(s);
 
 function applyTheme(){
@@ -182,6 +221,25 @@ function applyTheme(){
 $('#mode').onclick = () => {
   const mode = localStorage.getItem('qqp_mode') === 'dark' ? 'light' : 'dark';
   localStorage.setItem('qqp_mode', mode); applyTheme();
+};
+async function loadSettings(){
+  try {
+    const r = await fetch('/api/settings');
+    const s = await r.json();
+    const m = s.broadcastNotify || {};
+    if (typeof m[state.current] === 'boolean') $('#bcast').checked = m[state.current];
+    const cur = state.bots.find(b => b.id === state.current);
+    $('#bcastWrap').title = '群发开关（' + (cur ? cur.name : state.current) + '）：打开后，推送消息发给该机器人所有联系过的QQ用户';
+  } catch {}
+}
+$('#bcast').onchange = async function(){
+  try {
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bot: state.current, broadcastNotify: this.checked }),
+    });
+  } catch {}
 };
 $('#tints').innerHTML = '';
 TINTS.forEach(t => {
@@ -207,9 +265,85 @@ async function loadBots(){
 async function selectBot(id){
   state.current = id;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.id === id));
-  const r = await fetch('/api/chat?bot=' + encodeURIComponent(id));
+  await loadTopics();
+  loadSettings();
+}
+async function loadTopics(){
+  if (!state.current) return;
+  const r = await fetch('/api/topics?bot=' + encodeURIComponent(state.current));
+  const j = await r.json();
+  if (!j.ok) return;
+  state.topics = j.topics || [];
+  state.topic = j.current;
+  renderTopicList();
+  await loadChat();
+}
+async function loadChat(){
+  if (!state.current || !state.topic) return;
+  const r = await fetch('/api/chat?bot=' + encodeURIComponent(state.current) + '&topic=' + encodeURIComponent(state.topic));
   render(await r.json());
 }
+function renderTopicList(){
+  const box = $('#topicList'); box.innerHTML = '';
+  if (!state.topics.length){ box.innerHTML = '<div class="tempty">暂无话题</div>'; return; }
+  state.topics.forEach(t => {
+    const el = document.createElement('div');
+    el.className = 'titem' + (t.id === state.topic ? ' active' : '');
+    el.textContent = t.name;
+    el.title = t.id + ' ' + t.name;
+    el.onclick = () => selectTopic(t.id);
+    box.appendChild(el);
+  });
+}
+async function applyTopicResp(j){
+  if (!j.ok) return;
+  state.topics = j.topics || [];
+  state.topic = j.current;
+  renderTopicList();
+  await loadChat();
+}
+async function selectTopic(tid){
+  if (!state.current) return;
+  const r = await fetch('/api/topic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, action:'switch', topic: tid }) });
+  applyTopicResp(await r.json());
+}
+let nameCb = null;
+function openNameBox(title, value, cb){
+  nameCb = cb;
+  $('#nameTitle').textContent = title;
+  $('#nameInput').value = value || '';
+  $('#mask').classList.add('show');
+  $('#nameInput').focus();
+}
+function closeNameBox(){ $('#mask').classList.remove('show'); nameCb = null; }
+$('#nameOk').onclick = () => {
+  const v = $('#nameInput').value.trim();
+  const cb = nameCb;
+  closeNameBox();
+  if (cb && v) cb(v);
+};
+$('#nameCancel').onclick = closeNameBox;
+$('#nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#nameOk').click(); });
+$('#newTopic').onclick = () => {
+  if (!state.current) return;
+  openNameBox('新建话题', '', async (name) => {
+    const r = await fetch('/api/topic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, action:'new', name }) });
+    applyTopicResp(await r.json());
+  });
+};
+$('#renameTopic').onclick = () => {
+  if (!state.current) return;
+  const cur = state.topics.find(x => x.id === state.topic);
+  openNameBox('重命名话题', cur ? cur.name : '', async (name) => {
+    const r = await fetch('/api/topic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, action:'rename', name }) });
+    applyTopicResp(await r.json());
+  });
+};
+$('#archiveTopic').onclick = async () => {
+  if (!state.current) return;
+  const r = await fetch('/api/topic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ bot: state.current, action:'archive' }) });
+  applyTopicResp(await r.json());
+};
 function botShort(id){ const b = state.bots.find(x => x.id === id); return b ? b.name.slice(0,1) : '?'; }
 function render(list){
   const box = $('#msgs'); box.innerHTML = '';
@@ -244,7 +378,12 @@ function connectSSE(){
           b.className = 'badge ' + (p.status === '在线' ? 'online' : p.status === '处理中' ? 'busy' : 'off');
           b.textContent = p.status;
         }
-      } else if (p.type === 'chat' && p.bot === state.current){
+      } else if (p.type === 'topic' && p.bot === state.current){
+        state.topics = p.topics || [];
+        state.topic = p.current;
+        renderTopicList();
+        loadChat();
+      } else if (p.type === 'chat' && p.bot === state.current && p.topic === state.topic){
         appendMsg(p.entry);
       }
     } catch(err){}
