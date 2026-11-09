@@ -33,6 +33,7 @@ QQ Bot Bridge 1.1.0
 托盘启动
 --------
 运行 qq-bot-tray.ps1。首次运行时会尝试编译 QQBotTray.exe。
+运行 start-panel.ps1 可在桥接未启动时拉起桥接并打开聊天面板。
 
 通用面板示例
 ------------
