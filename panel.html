@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>我是机器人 v1.0.20</title>
+<title>QQ Bot Bridge v1.1.0</title>
 <style>
 :root{
   --g1:#8ecdfc; --g2:#a89cf8; --g3:#e4b1f5; --g4:#ffa8cf; --g5:#8fe0da;
   --text:#1c1c1e; --muted:rgba(28,28,30,.55);
   --border:rgba(255,255,255,.55);
   --surface:rgba(255,255,255,.38);
+  --surface-side:rgba(255,255,255,.26);
   --surface-strong:rgba(255,255,255,.5);
   --bubble-user:rgba(70,140,255,.64); --bubble-user-text:#fff;
   --bubble-bot:rgba(255,255,255,.5);
@@ -24,6 +25,7 @@ body.dark{
   --text:#f2f2f7; --muted:rgba(242,242,247,.55);
   --border:rgba(255,255,255,.14);
   --surface:rgba(24,24,30,.45);
+  --surface-side:rgba(24,24,30,.32);
   --surface-strong:rgba(40,40,48,.6);
   --bubble-user:rgba(80,150,255,.74); --bubble-user-text:#fff;
   --bubble-bot:rgba(40,40,48,.55);
@@ -84,7 +86,10 @@ header{
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 h1{font-size:15px;margin:0;font-weight:600;text-shadow:0 1px 2px rgba(255,255,255,.35)}
 .tab{padding:4px 12px;border:1px solid var(--border);border-radius:16px;cursor:pointer;font-size:12px;
+  display:inline-flex;align-items:center;gap:6px;
   background:var(--surface);color:var(--text);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.tab .tabav{width:24px;height:24px;border-radius:50%;object-fit:cover;flex:none}
+.tab .badge{margin-left:0}
 .tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(128,128,138,.15);margin-left:6px;color:var(--muted)}
 .badge.online{background:rgba(48,209,88,.22);color:var(--online)}
@@ -103,7 +108,7 @@ h1{font-size:15px;margin:0;font-weight:600;text-shadow:0 1px 2px rgba(255,255,25
 .dot{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid rgba(255,255,255,.6);box-shadow:var(--shadow)}
 .dot.active{border-color:var(--text)}
 #layout{display:flex;height:calc(100vh - 112px)}
-#side{width:150px;flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 8px;background:var(--surface);border-right:1px solid var(--border);-webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);overflow-y:auto}
+#side{width:150px;flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 8px;background:var(--surface-side);border-right:1px solid var(--border);-webkit-backdrop-filter:blur(28px) saturate(170%);backdrop-filter:blur(28px) saturate(170%);overflow-y:auto}
 .sideBtns{display:flex;gap:6px}
 .sideBtns button{flex:1;padding:6px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface-strong);color:var(--text);cursor:pointer;font-size:11px}
 .sideBtns button:hover{border-color:var(--accent)}
@@ -127,6 +132,9 @@ h1{font-size:15px;margin:0;font-weight:600;text-shadow:0 1px 2px rgba(255,255,25
 .msg{display:flex;margin:10px 0;align-items:flex-end}
 .msg.user{justify-content:flex-end}
 .avatar{width:26px;height:26px;border-radius:50%;flex:none;margin:0 7px;background:var(--avatar-bot);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;box-shadow:var(--shadow)}
+/* 机器人头像是抠好的透明图：放大后圆形裁剪（cover 铺满圆），不描圈、不加底色 */
+.avatar.pic{width:40px;height:40px;border-radius:50%;overflow:hidden;background:none;box-shadow:none;margin:0 4px}
+.avatar.pic img{width:100%;height:100%;object-fit:cover;display:block}
 .msg.user .avatar{background:var(--accent);order:2}
 .bubble{
   max-width:72%;padding:8px 13px;border-radius:18px;white-space:pre-wrap;word-break:break-word;
@@ -167,7 +175,7 @@ h1{font-size:15px;margin:0;font-weight:600;text-shadow:0 1px 2px rgba(255,255,25
 </head>
 <body>
 <header>
-<div class="row"><h1>我是机器人 v1.0.20</h1><div id="bots"></div></div>
+<div class="row"><h1>QQ Bot Bridge v1.1.0</h1><div id="bots"></div></div>
   <div class="toolbar">
     <button class="mode-btn" id="mode" title="浅色/深色">◐</button>
     <label class="switch" id="bcastWrap" title="群发开关：打开后，推送消息发给该机器人所有联系过的QQ用户">
@@ -256,7 +264,8 @@ async function loadBots(){
     const el = document.createElement('span');
     el.className = 'tab'; el.dataset.id = b.id;
     const cls = b.status === '在线' ? 'online' : b.status === '处理中' ? 'busy' : 'off';
-    el.innerHTML = b.name + '<span class="badge ' + cls + '">' + b.status + '</span>';
+    el.innerHTML = (b.avatar ? '<img class="tabav" src="' + b.avatar + '" alt="">' : '') +
+      esc(b.name) + '<span class="badge ' + cls + '">' + b.status + '</span>';
     el.onclick = () => selectBot(b.id);
     $('#bots').appendChild(el);
   });
@@ -265,6 +274,7 @@ async function loadBots(){
 async function selectBot(id){
   state.current = id;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.id === id));
+  setFavicon(botAvatarUrl(id));
   await loadTopics();
   loadSettings();
 }
@@ -345,6 +355,12 @@ $('#archiveTopic').onclick = async () => {
   applyTopicResp(await r.json());
 };
 function botShort(id){ const b = state.bots.find(x => x.id === id); return b ? b.name.slice(0,1) : '?'; }
+function botAvatarUrl(id){ const b = state.bots.find(x => x.id === id); return b && b.avatar ? b.avatar : null; }
+function setFavicon(url){
+  let link = document.querySelector('link[rel="icon"]');
+  if (!link){ link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+  link.href = url || 'data:,';
+}
 function render(list){
   const box = $('#msgs'); box.innerHTML = '';
   if (!list.length){ box.innerHTML = '<div id="empty">暂无聊天记录</div>'; return; }
@@ -355,7 +371,15 @@ function appendMsg(m){
   const wrap = document.createElement('div');
   wrap.className = 'msg ' + m.role;
   const av = document.createElement('div');
-  av.className = 'avatar'; av.textContent = m.role === 'user' ? '我' : (state.current ? botShort(state.current) : 'C');
+  const url = m.role === 'user' ? null : botAvatarUrl(state.current);
+  av.className = url ? 'avatar pic' : 'avatar';
+  if (url){
+    const img = document.createElement('img');
+    img.src = url; img.alt = '';
+    av.appendChild(img);
+  } else {
+    av.textContent = m.role === 'user' ? '我' : (state.current ? botShort(state.current) : 'C');
+  }
   const bub = document.createElement('div');
   bub.className = 'bubble';
   bub.innerHTML = esc(m.text) + '<span class="t">' + m.ts + '</span>';

@@ -41,7 +41,7 @@ public static class QQBotTrayProgram
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
-    private const string PANEL_TITLE_KEY = "我是机器人";
+    private const string PANEL_TITLE_KEY = "QQ Bot Bridge";
 
     [STAThread]
     private static void Main(string[] args)
@@ -215,7 +215,10 @@ public static class QQBotTrayProgram
 
     private static void ShowSettings(string panelUrl)
     {
-        string current = "F:\\iCloud\\iCloudDrive\\Codex";
+        string current = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "iCloudDrive",
+            "Codex");
         try
         {
             using (WebClient wc = new WebClient())

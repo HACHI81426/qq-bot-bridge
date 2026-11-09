@@ -1,0 +1,16 @@
+{
+  "remark": "my-bot-c2c",
+  "scope": "c2c",
+  "target_type": "all",
+  "panel": {
+    "items": [
+      { "type": "command", "name": "新话题", "desc": "创建一个独立的新话题" },
+      { "type": "command", "name": "切换话题", "desc": "查看并切换当前话题" },
+      { "type": "command", "name": "归档话题", "desc": "归档当前话题" },
+      { "type": "command", "name": "收件箱模式", "desc": "暂存碎片消息，稍后统一发送" },
+      { "type": "command", "name": "直连", "desc": "发送已暂存的收件箱消息" },
+      { "type": "command", "name": "停止", "desc": "停止当前正在执行的任务" },
+      { "type": "command", "name": "帮助", "desc": "查看内置指令说明" }
+    ]
+  }
+}

@@ -5,9 +5,15 @@ $exe = Join-Path $bridgeDir 'QQBotTray.exe'
 $cs = Join-Path $bridgeDir 'QQBotTray.cs'
 $logDir = Join-Path $bridgeDir 'logs'
 
-# 定位 node：优先 NODE_PATH，其次 PATH
+# 定位 node：优先 NODE_PATH，其次 PATH，再检查常见安装目录
 $node = if ($env:NODE_PATH -and (Test-Path -LiteralPath $env:NODE_PATH)) { $env:NODE_PATH } else { (Get-Command node -ErrorAction SilentlyContinue).Source }
-if (-not $node) { $node = 'node' }
+if (-not $node) {
+  $nodeCandidates = @()
+  if ($env:ProgramFiles) { $nodeCandidates += (Join-Path $env:ProgramFiles 'nodejs\node.exe') }
+  if (${env:ProgramFiles(x86)}) { $nodeCandidates += (Join-Path ${env:ProgramFiles(x86)} 'nodejs\node.exe') }
+  if ($env:LOCALAPPDATA) { $nodeCandidates += (Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe') }
+  $node = $nodeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
 
 # 托盘程序编译（首次运行或源码更新时自动重编）
 $needBuild = -not (Test-Path $exe)

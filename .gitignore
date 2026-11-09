@@ -8,7 +8,12 @@ logs/
 .out/
 data/
 chat-logs/
+qq-bot-chat/
 workspace/
 inbox/
 backups/
 node_modules/
+avatars/
+temp/
+work/
+*.zip

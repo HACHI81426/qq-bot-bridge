@@ -1,0 +1,10 @@
+{
+  "items": [
+    { "type": "send_message", "name": "直连", "send_message": "直连" },
+    { "type": "send_message", "name": "新话题", "send_message": "新话题" },
+    { "type": "send_message", "name": "切换话题", "send_message": "切换话题" },
+    { "type": "send_message", "name": "归档话题", "send_message": "归档话题" },
+    { "type": "send_message", "name": "收件箱模式", "send_message": "收件箱模式" },
+    { "type": "send_message", "name": "清空并直连", "send_message": "清空并直连" }
+  ]
+}
